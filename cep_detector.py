@@ -18,6 +18,8 @@ Déploiement Streamlit Cloud :
       OANDA_ACCESS_TOKEN = "votre-token"
       OANDA_ACCOUNT_ID   = "votre-compte"
       OANDA_ENVIRONMENT  = "practice"   # ou "live"
+      TELEGRAM_BOT_TOKEN = "123456:ABC..."
+      TELEGRAM_CHAT_ID   = "123456789"
 
 Usage local :
   streamlit run cep_detector.py
@@ -31,6 +33,7 @@ __author__  = "CEP Detector"
 # ═══════════════════════════════════════════════════════════════════
 
 import time
+import requests
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -38,6 +41,12 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+try:
+    from streamlit_autorefresh import st_autorefresh
+    AUTOREFRESH_AVAILABLE = True
+except ImportError:
+    AUTOREFRESH_AVAILABLE = False
 
 try:
     import oandapyV20
@@ -54,12 +63,34 @@ def get_config() -> dict:
     """
     try:
         return {
-            "access_token": st.secrets["OANDA_ACCESS_TOKEN"],
-            "account_id":   st.secrets.get("OANDA_ACCOUNT_ID", ""),
-            "environment":  st.secrets.get("OANDA_ENVIRONMENT", "practice"),
+            "access_token":      st.secrets["OANDA_ACCESS_TOKEN"],
+            "account_id":        st.secrets.get("OANDA_ACCOUNT_ID", ""),
+            "environment":       st.secrets.get("OANDA_ENVIRONMENT", "practice"),
+            "telegram_token":    st.secrets.get("TELEGRAM_BOT_TOKEN", ""),
+            "telegram_chat_id":  st.secrets.get("TELEGRAM_CHAT_ID", ""),
         }
     except Exception:
-        return {"access_token": "", "account_id": "", "environment": "practice"}
+        return {
+            "access_token": "", "account_id": "", "environment": "practice",
+            "telegram_token": "", "telegram_chat_id": "",
+        }
+
+
+# ── Telegram notification ────────────────────────────────────────
+def send_telegram(bot_token: str, chat_id: str, text: str) -> bool:
+    """Envoie un message Markdown via Telegram Bot API."""
+    if not bot_token or not chat_id:
+        return False
+    try:
+        url  = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        resp = requests.post(url, json={
+            "chat_id":    chat_id,
+            "text":       text,
+            "parse_mode": "Markdown",
+        }, timeout=10)
+        return resp.ok
+    except Exception:
+        return False
 
 # ── Liste d'instruments par défaut (format Oanda) ───────────────
 DEFAULT_INSTRUMENTS = [
@@ -595,6 +626,8 @@ def main():
     cfg          = get_config()
     access_token = cfg["access_token"]
     environment  = cfg["environment"]
+    tg_token     = cfg["telegram_token"]
+    tg_chat_id   = cfg["telegram_chat_id"]
 
     # ── En-tête ────────────────────────────────────────────────
     st.title("📊 CEP Detector")
@@ -661,6 +694,21 @@ def main():
         }
 
         st.divider()
+        st.subheader("⏱️ Scan automatique")
+        auto_scan = st.toggle("Activer le scan automatique", value=False)
+        refresh_interval = st.select_slider(
+            "Intervalle",
+            options=[5, 10, 15, 30, 60],
+            value=15,
+            format_func=lambda x: f"{x} min",
+            disabled=not auto_scan,
+        )
+        if tg_token and tg_chat_id:
+            st.success("🔔 Telegram configuré", icon="✅")
+        else:
+            st.caption("💬 Ajoutez TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID dans les secrets pour les alertes push.")
+
+        st.divider()
         scan_btn = st.button(
             "🔍 Lancer le scan",
             type="primary",
@@ -671,6 +719,14 @@ def main():
         if not access_token:
             st.warning("Credentials manquants. Vérifiez la configuration des secrets.")
 
+    # ── Auto-refresh (déclenche un re-run Streamlit périodique) ─
+    if auto_scan and AUTOREFRESH_AVAILABLE and access_token:
+        st_autorefresh(interval=refresh_interval * 60 * 1000, key="auto_scan_refresh")
+        # Le re-run déclenché par autorefresh doit lancer le scan
+        scan_btn = True
+    elif auto_scan and not AUTOREFRESH_AVAILABLE:
+        st.warning("`streamlit-autorefresh` non installé. Ajoutez-le dans requirements.txt.")
+
     # ── Secrets manquants → instructions déploiement ──────────
     if not access_token:
         st.error("⚠️ Credentials non configurés.")
@@ -679,7 +735,9 @@ def main():
                 "# .streamlit/secrets.toml\n"
                 'OANDA_ACCESS_TOKEN = "votre-token-ici"\n'
                 'OANDA_ACCOUNT_ID   = "votre-account-id"\n'
-                'OANDA_ENVIRONMENT  = "practice"   # ou "live"',
+                'OANDA_ENVIRONMENT  = "practice"   # ou "live"\n'
+                'TELEGRAM_BOT_TOKEN = "123456:ABC-votre-token"\n'
+                'TELEGRAM_CHAT_ID   = "123456789"',
                 language="toml",
             )
             st.markdown(
@@ -705,18 +763,42 @@ def main():
         progress_bar.empty()
         status_text.empty()
 
-        st.session_state["results"]   = results
-        st.session_state["scan_time"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        st.session_state["params"]    = params
+        # ── Détection des NOUVEAUX signaux → alerte Telegram ───
+        new_signals = [r for r in results if r.signal]
+        prev_signal_keys = st.session_state.get("prev_signal_keys", set())
+        current_keys     = {f"{r.instrument}_{r.direction}" for r in new_signals}
+        fresh_signals    = [
+            r for r in new_signals
+            if f"{r.instrument}_{r.direction}" not in prev_signal_keys
+        ]
+
+        if fresh_signals and tg_token and tg_chat_id:
+            for r in fresh_signals:
+                send_telegram(tg_token, tg_chat_id, r.to_telegram())
+
+        st.session_state["prev_signal_keys"] = current_keys
+        st.session_state["results"]          = results
+        st.session_state["scan_time"]        = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        st.session_state["params"]           = params
+        st.session_state["fresh_count"]      = len(fresh_signals)
 
     # ── Aucun résultat encore ──────────────────────────────────
     if "results" not in st.session_state:
         st.markdown("### ← Cliquez sur **Lancer le scan** pour démarrer.")
+        if auto_scan:
+            st.info("⏳ Scan automatique actif — premier scan en cours…")
         return
 
-    results   = st.session_state["results"]
-    scan_time = st.session_state.get("scan_time", "")
-    st.caption(f"Dernier scan : {scan_time}")
+    results     = st.session_state["results"]
+    scan_time   = st.session_state.get("scan_time", "")
+    fresh_count = st.session_state.get("fresh_count", 0)
+
+    col_time, col_fresh = st.columns([3, 1])
+    col_time.caption(f"Dernier scan : {scan_time}")
+    if fresh_count:
+        col_fresh.success(f"🔔 {fresh_count} nouveau(x) signal(aux) envoyé(s) sur Telegram")
+    elif auto_scan:
+        col_fresh.caption("Pas de nouveau signal depuis le dernier scan.")
 
     # ── Métriques résumé ───────────────────────────────────────
     signals  = [r for r in results if r.signal]
