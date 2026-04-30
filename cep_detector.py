@@ -15,9 +15,9 @@
 
 Déploiement Streamlit Cloud :
   → Ajouter dans Settings > Secrets :
-      OANDA_API_KEY     = "votre-clé"
-      OANDA_ACCOUNT_ID  = "votre-compte"
-      OANDA_ENVIRONMENT = "practice"   # ou "live"
+      OANDA_ACCESS_TOKEN = "votre-token"
+      OANDA_ACCOUNT_ID   = "votre-compte"
+      OANDA_ENVIRONMENT  = "practice"   # ou "live"
 
 Usage local :
   streamlit run cep_detector.py
@@ -49,18 +49,17 @@ except ImportError:
 # ── Streamlit Secrets → GitHub-safe ─────────────────────────────
 def get_config() -> dict:
     """
-    Charge les credentials depuis st.secrets (Streamlit Cloud)
-    ou retourne des valeurs vides pour la saisie manuelle.
+    Charge les credentials depuis st.secrets (Streamlit Cloud).
     Les tokens ne sont JAMAIS hardcodés ici.
     """
     try:
         return {
-            "api_key":     st.secrets["OANDA_API_KEY"],
-            "account_id":  st.secrets.get("OANDA_ACCOUNT_ID", ""),
-            "environment": st.secrets.get("OANDA_ENVIRONMENT", "practice"),
+            "access_token": st.secrets["OANDA_ACCESS_TOKEN"],
+            "account_id":   st.secrets.get("OANDA_ACCOUNT_ID", ""),
+            "environment":  st.secrets.get("OANDA_ENVIRONMENT", "practice"),
         }
     except Exception:
-        return {"api_key": "", "account_id": "", "environment": "practice"}
+        return {"access_token": "", "account_id": "", "environment": "practice"}
 
 # ── Liste d'instruments par défaut (format Oanda) ───────────────
 DEFAULT_INSTRUMENTS = [
@@ -108,11 +107,11 @@ DEFAULT_CEP_PARAMS = {
 # ═══════════════════════════════════════════════════════════════════
 
 def fetch_candles(
-    api_key:     str,
-    instrument:  str,
-    granularity: str,   # "D", "H4", "H1", "M30" …
-    count:       int,
-    environment: str = "practice",
+    access_token: str,
+    instrument:   str,
+    granularity:  str,   # "D", "H4", "H1", "M30" …
+    count:        int,
+    environment:  str = "practice",
 ) -> pd.DataFrame:
     """
     Télécharge les bougies OHLCV depuis l'API Oanda.
@@ -125,7 +124,7 @@ def fetch_candles(
     if not OANDA_AVAILABLE:
         raise ImportError("oandapyV20 n'est pas installé. Voir requirements.txt.")
 
-    client = oandapyV20.API(access_token=api_key, environment=environment)
+    client = oandapyV20.API(access_token=access_token, environment=environment)
 
     params = {
         "count":       count,
@@ -156,14 +155,14 @@ def fetch_candles(
 
 
 def fetch_multi_timeframe(
-    api_key:     str,
-    instrument:  str,
-    environment: str,
-    params:      dict,
+    access_token: str,
+    instrument:   str,
+    environment:  str,
+    params:       dict,
 ) -> tuple:
     """Retourne (df_D1, df_H4) avec indicateurs déjà calculés."""
-    df_d1 = fetch_candles(api_key, instrument, "D",  params["candles_d1"],  environment)
-    df_h4 = fetch_candles(api_key, instrument, "H4", params["candles_h4"], environment)
+    df_d1 = fetch_candles(access_token, instrument, "D",  params["candles_d1"],  environment)
+    df_h4 = fetch_candles(access_token, instrument, "H4", params["candles_h4"], environment)
     return df_d1, df_h4
 
 
@@ -516,7 +515,7 @@ def run_cep_engine(
 # ═══════════════════════════════════════════════════════════════════
 
 def run_scanner(
-    api_key:            str,
+    access_token:       str,
     environment:        str,
     instruments_list:   list,
     params:             dict,
@@ -537,7 +536,7 @@ def run_scanner(
             progress_callback(i / total, f"Analyse de {instrument}…")
 
         try:
-            df_d1, df_h4 = fetch_multi_timeframe(api_key, instrument, environment, params)
+            df_d1, df_h4 = fetch_multi_timeframe(access_token, instrument, environment, params)
             df_d1 = add_indicators(df_d1)
             df_h4 = add_indicators(df_h4)
             result = run_cep_engine(instrument, df_d1, df_h4, params)
@@ -592,6 +591,11 @@ def main():
         initial_sidebar_state="expanded",
     )
 
+    # ── Chargement credentials (secrets uniquement) ────────────
+    cfg          = get_config()
+    access_token = cfg["access_token"]
+    environment  = cfg["environment"]
+
     # ── En-tête ────────────────────────────────────────────────
     st.title("📊 CEP Detector")
     st.markdown(
@@ -602,23 +606,6 @@ def main():
 
     # ── Sidebar ────────────────────────────────────────────────
     with st.sidebar:
-        st.header("⚙️ Configuration Oanda")
-        cfg = get_config()
-
-        api_key = st.text_input(
-            "API Key",
-            value=cfg["api_key"],
-            type="password",
-            help="Via Streamlit Secrets : OANDA_API_KEY",
-            placeholder="Votre clé Oanda…",
-        )
-        environment = st.selectbox(
-            "Environnement",
-            ["practice", "live"],
-            index=0 if cfg["environment"] == "practice" else 1,
-        )
-
-        st.divider()
         st.subheader("📋 Instruments")
         instruments_input = st.text_area(
             "Un par ligne (format Oanda)",
@@ -678,21 +665,21 @@ def main():
             "🔍 Lancer le scan",
             type="primary",
             use_container_width=True,
-            disabled=not bool(api_key),
+            disabled=not bool(access_token),
         )
 
-        if not api_key:
-            st.warning("Entrez votre API key pour activer le scan.")
+        if not access_token:
+            st.warning("Credentials manquants. Vérifiez la configuration des secrets.")
 
-    # ── Pas de clé → instructions ──────────────────────────────
-    if not api_key:
-        st.info("👈 Configurez votre API key Oanda dans le panneau latéral.")
-        with st.expander("📖 Comment configurer les secrets Streamlit ?"):
+    # ── Secrets manquants → instructions déploiement ──────────
+    if not access_token:
+        st.error("⚠️ Credentials non configurés.")
+        with st.expander("📖 Comment configurer les secrets ?"):
             st.code(
                 "# .streamlit/secrets.toml\n"
-                'OANDA_API_KEY     = "votre-clé-ici"\n'
-                'OANDA_ACCOUNT_ID  = "votre-account-id"\n'
-                'OANDA_ENVIRONMENT = "practice"   # ou "live"',
+                'OANDA_ACCESS_TOKEN = "votre-token-ici"\n'
+                'OANDA_ACCOUNT_ID   = "votre-account-id"\n'
+                'OANDA_ENVIRONMENT  = "practice"   # ou "live"',
                 language="toml",
             )
             st.markdown(
@@ -712,7 +699,7 @@ def main():
 
         with st.spinner("Scan en cours…"):
             results = run_scanner(
-                api_key, environment, instruments_list, params, update_progress
+                access_token, environment, instruments_list, params, update_progress
             )
 
         progress_bar.empty()
