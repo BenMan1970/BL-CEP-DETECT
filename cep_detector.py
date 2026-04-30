@@ -18,7 +18,7 @@ Déploiement Streamlit Cloud :
       OANDA_ACCESS_TOKEN = "votre-token"
       OANDA_ACCOUNT_ID   = "votre-compte"
       OANDA_ENVIRONMENT  = "practice"   # ou "live"
-      TELEGRAM_BOT_TOKEN = "123456:ABC..."
+      TELEGRAM_TOKEN = "123456:ABC..."
       TELEGRAM_CHAT_ID   = "123456789"
 
 Usage local :
@@ -66,7 +66,7 @@ def get_config() -> dict:
             "access_token":      st.secrets["OANDA_ACCESS_TOKEN"],
             "account_id":        st.secrets.get("OANDA_ACCOUNT_ID", ""),
             "environment":       st.secrets.get("OANDA_ENVIRONMENT", "practice"),
-            "telegram_token":    st.secrets.get("TELEGRAM_BOT_TOKEN", ""),
+            "telegram_token":    st.secrets.get("TELEGRAM_TOKEN", ""),
             "telegram_chat_id":  st.secrets.get("TELEGRAM_CHAT_ID", ""),
         }
     except Exception:
@@ -706,7 +706,7 @@ def main():
         if tg_token and tg_chat_id:
             st.success("🔔 Telegram configuré", icon="✅")
         else:
-            st.caption("💬 Ajoutez TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID dans les secrets pour les alertes push.")
+            st.caption("💬 Ajoutez TELEGRAM_TOKEN et TELEGRAM_CHAT_ID dans les secrets pour les alertes push.")
 
         st.divider()
         scan_btn = st.button(
@@ -736,7 +736,7 @@ def main():
                 'OANDA_ACCESS_TOKEN = "votre-token-ici"\n'
                 'OANDA_ACCOUNT_ID   = "votre-account-id"\n'
                 'OANDA_ENVIRONMENT  = "practice"   # ou "live"\n'
-                'TELEGRAM_BOT_TOKEN = "123456:ABC-votre-token"\n'
+                'TELEGRAM_TOKEN = "123456:ABC-votre-token"\n'
                 'TELEGRAM_CHAT_ID   = "123456789"',
                 language="toml",
             )
